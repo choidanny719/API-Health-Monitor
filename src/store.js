@@ -32,6 +32,17 @@ export class Store {
         result TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS checks_monitor ON checks(monitor_id, id DESC);
+      CREATE TABLE IF NOT EXISTS incidents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+        opened_at TEXT NOT NULL,
+        resolved_at TEXT,
+        failure_code TEXT NOT NULL,
+        message TEXT NOT NULL,
+        resolution TEXT
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS incidents_open ON incidents(monitor_id) WHERE resolved_at IS NULL;
+      CREATE INDEX IF NOT EXISTS incidents_history ON incidents(monitor_id, id DESC);
     `);
   }
 
@@ -74,11 +85,14 @@ export class Store {
 
   update(id, config, now = Date.now()) {
     this.get(id);
-    this.db.prepare(`
-      UPDATE monitors SET config = ?, enabled = ?, revision = revision + 1,
-      status = 'pending', failure_count = 0, last_checked_at = NULL, next_check_at = ?, updated_at = ?
-      WHERE id = ?
-    `).run(JSON.stringify(config), Number(config.enabled), now, now, id);
+    this.transaction(() => {
+      this.db.prepare(`
+        UPDATE monitors SET config = ?, enabled = ?, revision = revision + 1,
+        status = 'pending', failure_count = 0, last_checked_at = NULL, next_check_at = ?, updated_at = ?
+        WHERE id = ?
+      `).run(JSON.stringify(config), Number(config.enabled), now, now, id);
+      this.resolveIncident(id, new Date(now).toISOString(), 'configuration_changed');
+    });
     return this.get(id);
   }
 
@@ -87,23 +101,77 @@ export class Store {
     this.db.prepare('DELETE FROM monitors WHERE id = ?').run(id);
   }
 
-  record(monitor, result) {
+  record(monitor, result, now = Date.now()) {
     const row = this.db.prepare('SELECT * FROM monitors WHERE id = ?').get(monitor.id);
     if (!row || row.revision !== monitor.revision || result.failureCode === 'cancelled') return null;
-    const entry = this.db.prepare('INSERT INTO checks (monitor_id, revision, result) VALUES (?, ?, ?)')
-      .run(monitor.id, monitor.revision, JSON.stringify(result));
-    this.db.prepare(`
-      DELETE FROM checks WHERE monitor_id = ? AND id NOT IN (
-        SELECT id FROM checks WHERE monitor_id = ? ORDER BY id DESC LIMIT 1000
-      )
-    `).run(monitor.id, monitor.id);
-    return { id: Number(entry.lastInsertRowid), monitorId: monitor.id, revision: monitor.revision, ...result };
+    return this.transaction(() => {
+      const entry = this.db.prepare('INSERT INTO checks (monitor_id, revision, result) VALUES (?, ?, ?)')
+        .run(monitor.id, monitor.revision, JSON.stringify(result));
+      const failures = result.ok ? 0 : row.failure_count + 1;
+      const status = result.ok ? 'up' : failures >= 3 ? 'down' : row.status;
+      this.db.prepare(`
+        UPDATE monitors SET status = ?, failure_count = ?, last_checked_at = ?, next_check_at = ? WHERE id = ?
+      `).run(status, failures, Date.parse(result.checkedAt), now + monitor.intervalSeconds * 1000, monitor.id);
+      if (result.ok) {
+        this.resolveIncident(monitor.id, result.checkedAt, 'recovered');
+      } else if (failures >= 3) {
+        this.db.prepare(`
+          INSERT OR IGNORE INTO incidents (monitor_id, opened_at, failure_code, message) VALUES (?, ?, ?, ?)
+        `).run(monitor.id, result.checkedAt, result.failureCode, result.message);
+      }
+      this.db.prepare(`
+        DELETE FROM checks WHERE monitor_id = ? AND id NOT IN (
+          SELECT id FROM checks WHERE monitor_id = ? ORDER BY id DESC LIMIT 1000
+        )
+      `).run(monitor.id, monitor.id);
+      this.db.prepare(`
+        DELETE FROM incidents WHERE monitor_id = ? AND id NOT IN (
+          SELECT id FROM incidents WHERE monitor_id = ? ORDER BY id DESC LIMIT 100
+        )
+      `).run(monitor.id, monitor.id);
+      return { id: Number(entry.lastInsertRowid), monitorId: monitor.id, revision: monitor.revision, ...result };
+    });
   }
 
   checks(id, limit) {
     this.get(id);
     return this.db.prepare('SELECT * FROM checks WHERE monitor_id = ? ORDER BY id DESC LIMIT ?').all(id, limit)
       .map(row => ({ id: row.id, monitorId: row.monitor_id, revision: row.revision, ...JSON.parse(row.result) }));
+  }
+
+  incidents(id, limit) {
+    this.get(id);
+    return this.db.prepare('SELECT * FROM incidents WHERE monitor_id = ? ORDER BY id DESC LIMIT ?').all(id, limit)
+      .map(row => ({
+        id: row.id, monitorId: row.monitor_id, openedAt: row.opened_at, resolvedAt: row.resolved_at,
+        failureCode: row.failure_code, message: row.message, resolution: row.resolution
+      }));
+  }
+
+  resolveIncident(id, at, resolution) {
+    this.db.prepare('UPDATE incidents SET resolved_at = ?, resolution = ? WHERE monitor_id = ? AND resolved_at IS NULL')
+      .run(at, resolution, id);
+  }
+
+  due(now) {
+    return this.db.prepare('SELECT id FROM monitors WHERE enabled = 1 AND next_check_at <= ? ORDER BY next_check_at, id').all(now);
+  }
+
+  defer(monitor, now) {
+    this.db.prepare('UPDATE monitors SET next_check_at = ? WHERE id = ? AND revision = ?')
+      .run(now + monitor.intervalSeconds * 1000, monitor.id, monitor.revision);
+  }
+
+  transaction(action) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = action();
+      this.db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   close() {

@@ -1,8 +1,7 @@
 import express from 'express';
 import { historyLimit, validateMonitor } from './validation.js';
-import { HttpError } from './errors.js';
 
-export function createApp({ store, checker } = {}) {
+export function createApp({ store, runner } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '16kb' }));
@@ -35,14 +34,15 @@ export function createApp({ store, checker } = {}) {
   });
 
   app.post('/monitors/:id/check', async (req, res) => {
-    const monitor = store.get(req.params.id);
-    const result = store.record(monitor, await checker(monitor));
-    if (!result) throw new HttpError(409, 'Monitor changed while the check was running');
-    res.status(201).json(result);
+    res.status(201).json(await runner.run(req.params.id));
   });
 
   app.get('/monitors/:id/checks', (req, res) => {
     res.json(store.checks(req.params.id, historyLimit(req.query.limit)));
+  });
+
+  app.get('/monitors/:id/incidents', (req, res) => {
+    res.json(store.incidents(req.params.id, historyLimit(req.query.limit)));
   });
 
   app.use((req, res) => {

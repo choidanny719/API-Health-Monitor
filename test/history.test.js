@@ -3,6 +3,7 @@ import test from 'node:test';
 import { Store } from '../src/store.js';
 import { createApp } from '../src/app.js';
 import { validateMonitor } from '../src/validation.js';
+import { Runner } from '../src/runner.js';
 import { serve, jsonRequest } from './helpers.js';
 
 const result = { checkedAt: new Date().toISOString(), ok: true, statusCode: 200, durationMs: 5, failureCode: null, message: null };
@@ -11,7 +12,8 @@ test('manual checks save history, enforce limits and disappear with the monitor'
   const store = new Store();
   t.after(() => store.close());
   const monitor = store.create(validateMonitor({ name: 'Catalog', url: 'https://example.com' }));
-  const base = await serve(t, createApp({ store, checker: async () => result }));
+  const runner = new Runner(store, async () => result);
+  const base = await serve(t, createApp({ store, runner }));
   const path = `/monitors/${monitor.id}`;
   const checked = await jsonRequest(base, `${path}/check`, 'POST');
   assert.equal(checked.status, 201);
