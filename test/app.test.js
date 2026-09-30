@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import http from 'node:http';
 import { createApp } from '../src/app.js';
 import { serve, jsonRequest } from './helpers.js';
 
@@ -21,4 +22,17 @@ test('malformed JSON returns a client error', async t => {
   });
   assert.equal(response.status, 400);
   assert.equal(typeof (await response.json()).error, 'string');
+});
+
+test('rejects foreign hostnames and browser origins', async t => {
+  const base = await serve(t, createApp());
+  const status = await new Promise((resolve, reject) => {
+    http.get(`${base}/health`, { headers: { host: 'attacker.example' } }, response => {
+      response.resume();
+      resolve(response.statusCode);
+    }).on('error', reject);
+  });
+  assert.equal(status, 403);
+  assert.equal((await fetch(`${base}/health`, { headers: { origin: 'https://attacker.example' } })).status, 403);
+  assert.equal((await fetch(`${base}/health`, { headers: { origin: base } })).status, 200);
 });
