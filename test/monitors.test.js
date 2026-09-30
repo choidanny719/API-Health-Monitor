@@ -64,3 +64,16 @@ test('URL validation blocks local, reserved, encoded and credential-bearing targ
   ]) assert.throws(() => validateMonitor({ ...config, url }), { status: 400 }, url);
   assert.equal(validateMonitor({ ...config, url: 'https://1.1.1.1/' }).url, 'https://1.1.1.1/');
 });
+
+test('rejects numeric expectations that would change when saved as JSON', async t => {
+  const store = new Store();
+  t.after(() => store.close());
+  const base = await serve(t, createApp({ store }));
+  const response = await fetch(`${base}/monitors`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{"name":"Catalog","url":"https://example.com","expectedJson":{"path":"price","equals":1e999}}'
+  });
+  assert.equal(response.status, 400);
+  assert.equal(store.list().length, 0);
+});

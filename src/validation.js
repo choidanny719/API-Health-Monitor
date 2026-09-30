@@ -49,6 +49,7 @@ export function validateMonitor(body, current) {
       !/^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(rule.path) ||
       rule.path.split('.').some(part => ['__proto__', 'prototype', 'constructor'].includes(part)) ||
       (rule.equals !== null && !['string', 'number', 'boolean'].includes(typeof rule.equals)) ||
+      (typeof rule.equals === 'number' && !Number.isFinite(rule.equals)) ||
       (typeof rule.equals === 'string' && rule.equals.length > 1000)) {
       throw new HttpError(400, 'expectedJson must contain a dot-separated path and a primitive equals value');
     }
