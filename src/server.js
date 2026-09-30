@@ -1,5 +1,6 @@
 import { createApp } from './app.js';
 import { Store } from './store.js';
+import { createChecker } from './checker.js';
 
 const port = Number(process.env.PORT ?? 3000);
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -7,7 +8,7 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 }
 
 const store = new Store(process.env.DB_PATH ?? 'data/monitor.db');
-const server = createApp({ store }).listen(port, '127.0.0.1', () => {
+const server = createApp({ store, checker: createChecker() }).listen(port, '127.0.0.1', () => {
   console.log(`API Health Monitor listening at http://localhost:${port}`);
 });
 

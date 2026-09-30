@@ -25,6 +25,13 @@ export class Store {
         updated_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS monitors_due ON monitors(enabled, next_check_at);
+      CREATE TABLE IF NOT EXISTS checks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+        revision INTEGER NOT NULL,
+        result TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS checks_monitor ON checks(monitor_id, id DESC);
     `);
   }
 
@@ -78,6 +85,25 @@ export class Store {
   delete(id) {
     this.get(id);
     this.db.prepare('DELETE FROM monitors WHERE id = ?').run(id);
+  }
+
+  record(monitor, result) {
+    const row = this.db.prepare('SELECT * FROM monitors WHERE id = ?').get(monitor.id);
+    if (!row || row.revision !== monitor.revision || result.failureCode === 'cancelled') return null;
+    const entry = this.db.prepare('INSERT INTO checks (monitor_id, revision, result) VALUES (?, ?, ?)')
+      .run(monitor.id, monitor.revision, JSON.stringify(result));
+    this.db.prepare(`
+      DELETE FROM checks WHERE monitor_id = ? AND id NOT IN (
+        SELECT id FROM checks WHERE monitor_id = ? ORDER BY id DESC LIMIT 1000
+      )
+    `).run(monitor.id, monitor.id);
+    return { id: Number(entry.lastInsertRowid), monitorId: monitor.id, revision: monitor.revision, ...result };
+  }
+
+  checks(id, limit) {
+    this.get(id);
+    return this.db.prepare('SELECT * FROM checks WHERE monitor_id = ? ORDER BY id DESC LIMIT ?').all(id, limit)
+      .map(row => ({ id: row.id, monitorId: row.monitor_id, revision: row.revision, ...JSON.parse(row.result) }));
   }
 
   close() {

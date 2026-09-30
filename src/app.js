@@ -1,7 +1,8 @@
 import express from 'express';
-import { validateMonitor } from './validation.js';
+import { historyLimit, validateMonitor } from './validation.js';
+import { HttpError } from './errors.js';
 
-export function createApp({ store } = {}) {
+export function createApp({ store, checker } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '16kb' }));
@@ -31,6 +32,17 @@ export function createApp({ store } = {}) {
   app.delete('/monitors/:id', (req, res) => {
     store.delete(req.params.id);
     res.status(204).end();
+  });
+
+  app.post('/monitors/:id/check', async (req, res) => {
+    const monitor = store.get(req.params.id);
+    const result = store.record(monitor, await checker(monitor));
+    if (!result) throw new HttpError(409, 'Monitor changed while the check was running');
+    res.status(201).json(result);
+  });
+
+  app.get('/monitors/:id/checks', (req, res) => {
+    res.json(store.checks(req.params.id, historyLimit(req.query.limit)));
   });
 
   app.use((req, res) => {
