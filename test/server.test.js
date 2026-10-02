@@ -19,7 +19,7 @@ test('server starts, persists a monitor across restart and exits on SIGTERM', { 
 
   async function start() {
     const child = spawn(process.execPath, ['src/server.js'], {
-      env: { ...process.env, PORT: String(port), DB_PATH: join(dir, 'test.db') },
+      env: { ...process.env, PORT: String(port), DB_PATH: join(dir, 'test.db'), HOST: '127.0.0.1', PUBLIC_DEMO: 'true' },
       stdio: ['ignore', 'pipe', 'pipe']
     });
     t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });
@@ -38,6 +38,16 @@ test('server starts, persists a monitor across restart and exits on SIGTERM', { 
   }
 
   const first = await start();
+  const page = await fetch(base);
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /Interactive demo/);
+  const scenarioResponse = await fetch(`${base}/api/demo/run`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ scenario: 'wrong-json' })
+  });
+  assert.equal(scenarioResponse.status, 200);
+  assert.equal((await scenarioResponse.json()).checks[0].failureCode, 'json_mismatch');
   const created = await jsonRequest(base, '/monitors', 'POST', {
     name: 'Paused API', url: 'https://example.com/health', enabled: false
   });

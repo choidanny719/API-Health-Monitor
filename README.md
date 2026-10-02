@@ -1,6 +1,6 @@
 # API Health Monitor
 
-A local API monitor built with JavaScript, Node.js, Express and SQLite. Checks HTTP status, response time and optional JSON values. Three consecutive failures open an incident; the next successful check resolves it.
+A JavaScript monitor built with Node.js, Express and SQLite. Check HTTP status, response time and JSON values; three consecutive failures open an incident, and a successful check resolves it.
 
 ## Run
 
@@ -11,51 +11,28 @@ npm ci
 npm start
 ```
 
-The API listens at `http://localhost:3000`. Data is saved to `data/monitor.db`. Set `PORT` or `DB_PATH` to override either default. Use `npm run dev` to restart on file changes.
+Open `http://localhost:3000` for the interactive dashboard and API. Monitor data is saved to `data/monitor.db`.
 
-## Try it
+## API
 
 ```sh
 curl -X POST http://localhost:3000/monitors \
   -H 'Content-Type: application/json' \
-  -d '{"name":"Example","url":"https://example.com","intervalSeconds":60}'
-
-curl http://localhost:3000/monitors
-curl -X POST http://localhost:3000/monitors/ID/check
-curl http://localhost:3000/monitors/ID/checks
-curl http://localhost:3000/monitors/ID/incidents
+  -d '{"name":"Example","url":"https://example.com"}'
 ```
-
-Replace `ID` with the ID returned when creating a monitor.
 
 | Method | Route | Purpose |
 | --- | --- | --- |
-| GET | `/health` | Service health |
-| GET, POST | `/monitors` | List or create monitors |
-| GET, PATCH, DELETE | `/monitors/:id` | Read, edit or delete a monitor |
-| POST | `/monitors/:id/check` | Run a check now |
-| GET | `/monitors/:id/checks` | Recent results |
+| GET, POST | `/monitors` | List or create |
+| GET, PATCH, DELETE | `/monitors/:id` | View, edit or delete |
+| POST | `/monitors/:id/check` | Run a check |
+| GET | `/monitors/:id/checks` | Check history |
 | GET | `/monitors/:id/incidents` | Incident history |
 
-History routes accept `?limit=50` (maximum 100), newest first.
+Intervals range from 10 seconds to 24 hours. Optional rules include `expectedStatus`, `maxResponseMs`, and `expectedJson`, for example `{"path":"data.ready","equals":true}`. Targets must resolve to public IP addresses. Redirects are rejected and responses are capped at 64 KiB.
 
-Optional fields: `expectedStatus` (200), `timeoutMs` (5000), `maxResponseMs`, `enabled` (true), and `expectedJson`, such as `{"path":"data.ready","equals":true}`. JSON comparisons preserve types. Intervals range from 10 seconds to 24 hours; timeouts from 100 to 30,000 ms and cannot exceed the interval.
+## Demo and tests
 
-## Behaviour
+The dashboard runs healthy, wrong-JSON, slow-response, and outage-and-recovery scenarios with fixed sample responses. It uses the real checker and incident logic without contacting outside sites. `npm run demo` runs a terminal version; `npm test` runs the test suite.
 
-- At most four checks run at once, with one per monitor. Busy manual requests return 409 or 429. Checks have no immediate retries.
-- New monitors are checked on the next scheduler tick. Later checks wait one interval after completion. Pausing stops scheduled checks; manual checks still work.
-- State and history survive restarts. Editing resets the failure streak and closes open incidents as `configuration_changed`. Results from older configurations are discarded.
-- Up to 100 monitors, 1,000 results and 100 incidents per monitor are retained. Deleting a monitor removes its history.
-- Targets must resolve only to public addresses. Connections use the validated address, redirects are rejected, and responses are capped at 64 KiB. Deadlines include DNS and response reading.
-
-This is a single-process tool with no login or frontend. It binds to loopback and rejects remote browser origins. Checks run from the machine hosting it; monitoring stops when that process or computer stops.
-
-## Tests and demo
-
-```sh
-npm test
-npm run demo
-```
-
-The demo runs a local fixture through the API, checker and database: success, wrong JSON, HTTP 503, timeout, recovery. It uses an isolated test transport; the normal server still blocks local targets. Tests cover validation, network failures, history, scheduling, incidents, persistence and shutdown. GitHub Actions runs both commands.
+For hosting the dashboard, set `HOST=0.0.0.0` and `PUBLIC_DEMO=true`. The dashboard and its fixed demo routes become public; monitor-management routes remain local-only. `PUBLIC_DEMO=false` disables the dashboard.
