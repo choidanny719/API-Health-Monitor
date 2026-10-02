@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f7fb">
+  <meta name="description" content="Explore a live API health monitor demo. Test outages, slow responses, JSON checks, and recovery.">
+  <title>API Health Monitor · Interactive demo</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <a class="skip-link" href="#workspace">Skip to demo</a>
+  <header class="topbar">
+    <a class="wordmark" href="/" aria-label="API Health Monitor home">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" fill="none"><path d="M3 17h6l3-9 6 17 4-12 3 4h4" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </span>
+      <span>Pulsecheck</span>
+    </a>
+    <div class="topbar-meta">
+      <span class="demo-dot" aria-hidden="true"></span>
+      <span>Interactive demo</span>
+      <span class="topbar-divider" aria-hidden="true"></span>
+      <span class="topbar-note">Sample responses · no outside sites are contacted</span>
+    </div>
+    <a class="repo-link" href="https://github.com/choidanny719/API-Health-Monitor" target="_blank" rel="noreferrer">
+      View source <span aria-hidden="true">↗</span>
+    </a>
+  </header>
+
+  <main id="workspace" class="page-shell">
+    <section class="intro">
+      <div class="eyebrow"><span class="eyebrow-line"></span> API reliability, made visible</div>
+      <h1>Know when an API is<br class="desktop-break"> actually healthy.</h1>
+      <p>Try a few controlled scenarios. See how response codes, response times, and the data returned affect a service’s health.</p>
+    </section>
+
+    <section class="workspace" aria-label="Interactive API monitor">
+      <div class="workspace-heading">
+        <div>
+          <div class="section-label">DEMO WORKSPACE</div>
+          <h2>Service overview</h2>
+        </div>
+        <span class="sample-badge"><span aria-hidden="true">●</span> Sample data</span>
+      </div>
+
+      <div class="summary-grid">
+        <article class="summary-card status-summary">
+          <div class="summary-top"><span>Checkout API</span><span class="service-icon" aria-hidden="true">↗</span></div>
+          <div id="service-status" class="status-value pending">Ready to test</div>
+          <div id="service-subtitle" class="summary-caption">Run a scenario to check the service</div>
+        </article>
+        <article class="summary-card">
+          <div class="summary-top">Recent checks <span class="mini-icon" aria-hidden="true">⌁</span></div>
+          <div id="check-count" class="metric-value">0</div>
+          <div class="summary-caption">in this scenario</div>
+        </article>
+        <article class="summary-card">
+          <div class="summary-top">Consecutive failures <span class="mini-icon" aria-hidden="true">↗</span></div>
+          <div id="failure-count" class="metric-value">0</div>
+          <div id="failure-caption" class="summary-caption">Incident opens at 3</div>
+        </article>
+      </div>
+
+      <div class="main-grid">
+        <section class="panel scenario-panel" aria-labelledby="scenario-heading">
+          <div class="panel-heading">
+            <div>
+              <div class="section-label">CONTROLLED SCENARIOS</div>
+              <h2 id="scenario-heading">What should happen?</h2>
+            </div>
+            <span class="step-count">01—04</span>
+          </div>
+          <label for="scenario-select" class="field-label">Choose a scenario</label>
+          <select id="scenario-select" class="scenario-select" disabled>
+            <option>Loading scenarios…</option>
+          </select>
+          <p id="scenario-description" class="scenario-description">Loading the demo scenarios.</p>
+          <button id="run-button" class="run-button" type="button" disabled>
+            <span id="run-icon" aria-hidden="true">▶</span>
+            <span id="run-label">Run scenario</span>
+            <span class="button-arrow" aria-hidden="true">→</span>
+          </button>
+          <p class="scenario-footnote"><span aria-hidden="true">⏱</span> Each run uses its own in-memory sample data.</p>
+          <div class="rule-note">
+            <span class="rule-icon" aria-hidden="true">i</span>
+            <p><strong>Health rule</strong><br>HTTP 200, response under 120 ms, and <code>data.ready</code> must be <code>true</code>.</p>
+          </div>
+        </section>
+
+        <section class="panel activity-panel" aria-labelledby="activity-heading">
+          <div class="panel-heading activity-heading">
+            <div>
+              <div class="section-label">CHECK HISTORY</div>
+              <h2 id="activity-heading">Backend activity</h2>
+            </div>
+            <span id="run-state" class="run-state"><span class="state-dot" aria-hidden="true"></span> Waiting for a run</span>
+          </div>
+          <div class="log-header" aria-hidden="true"><span>CHECK</span><span>RESULT</span><span>TIME</span></div>
+          <div id="activity-list" class="activity-list" role="log" aria-live="polite" aria-relevant="additions text">
+            <div class="empty-state">
+              <span class="empty-icon" aria-hidden="true">⌁</span>
+              <p>Nothing recorded yet.</p>
+              <span>Choose a scenario to see the checks and incident history.</span>
+            </div>
+          </div>
+          <div id="incident-panel" class="incident-panel" hidden>
+            <div class="incident-icon" aria-hidden="true">!</div>
+            <div class="incident-copy">
+              <strong id="incident-title">Incident opened</strong>
+              <span id="incident-detail">Three checks failed in a row.</span>
+            </div>
+            <span id="incident-status" class="incident-status">Open</span>
+          </div>
+          <div id="activity-footer" class="activity-footer">Waiting for the first check</div>
+        </section>
+      </div>
+
+      <div class="workspace-footer">
+        <span><span class="footer-lock" aria-hidden="true">◈</span> Runs through the same checker and incident rules as the backend.</span>
+        <span>Node.js · Express · SQLite</span>
+      </div>
+    </section>
+
+    <section class="how-it-works" aria-labelledby="how-heading">
+      <div>
+        <div class="section-label">WHAT THIS DEMO SHOWS</div>
+        <h2 id="how-heading">A green status code<br>doesn’t tell the whole story.</h2>
+      </div>
+      <p>An API can answer successfully and still return data your app can’t use. Pulsecheck checks what came back, tracks repeated failures, and records when service recovers.</p>
+      <div class="how-stat"><strong>3</strong><span>failures open<br>an incident</span></div>
+    </section>
+    <footer class="page-footer"><span>Pulsecheck is a learning project.</span><span>Scenarios use synthetic responses and do not contact external services.</span></footer>
+  </main>
+</body>
+</html>

@@ -17,9 +17,9 @@ test('server starts, persists a monitor across restart and exits on SIGTERM', { 
   await new Promise(resolve => portServer.close(resolve));
   const base = `http://127.0.0.1:${port}`;
 
-  async function start() {
+  async function start(host = '127.0.0.1') {
     const child = spawn(process.execPath, ['src/server.js'], {
-      env: { ...process.env, PORT: String(port), DB_PATH: join(dir, 'test.db') },
+      env: { ...process.env, PORT: String(port), DB_PATH: join(dir, 'test.db'), HOST: host, PUBLIC_DEMO: 'true' },
       stdio: ['ignore', 'pipe', 'pipe']
     });
     t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });
@@ -38,6 +38,16 @@ test('server starts, persists a monitor across restart and exits on SIGTERM', { 
   }
 
   const first = await start();
+  const page = await fetch(base);
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /Interactive demo/);
+  const scenarioResponse = await fetch(`${base}/api/demo/run`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ scenario: 'wrong-json' })
+  });
+  assert.equal(scenarioResponse.status, 200);
+  assert.equal((await scenarioResponse.json()).checks[0].failureCode, 'json_mismatch');
   const created = await jsonRequest(base, '/monitors', 'POST', {
     name: 'Paused API', url: 'https://example.com/health', enabled: false
   });
@@ -46,4 +56,10 @@ test('server starts, persists a monitor across restart and exits on SIGTERM', { 
   const second = await start();
   assert.deepEqual((await jsonRequest(base, `/monitors/${created.body.id}`)).body, created.body);
   await stop(second);
+  const hosted = await start('0.0.0.0');
+  assert.equal((await jsonRequest(base, '/api/demo/scenarios')).status, 200);
+  assert.equal((await jsonRequest(base, '/api/demo/run', 'POST', { scenario: 'healthy' })).status, 200);
+  assert.equal((await jsonRequest(base, '/monitors')).status, 403);
+  assert.equal((await jsonRequest(base, `/monitors/${created.body.id}/check`, 'POST')).status, 403);
+  await stop(hosted);
 });

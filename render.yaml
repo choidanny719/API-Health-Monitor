@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: api-health-monitor-demo
+    runtime: node
+    plan: free
+    branch: demo-dashboard
+    buildCommand: npm ci
+    startCommand: npm start
+    autoDeployTrigger: 'off'
+    healthCheckPath: /api/demo/scenarios
+    envVars:
+      - key: NODE_VERSION
+        value: '24'
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: PUBLIC_DEMO
+        value: 'true'
