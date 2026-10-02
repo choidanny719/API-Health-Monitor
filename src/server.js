@@ -2,6 +2,7 @@ import { createApp } from './app.js';
 import { Store } from './store.js';
 import { createChecker } from './checker.js';
 import { Runner } from './runner.js';
+import { createDemoService } from './demo-service.js';
 
 const port = Number(process.env.PORT ?? 3000);
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -10,9 +11,13 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 
 const store = new Store(process.env.DB_PATH ?? 'data/monitor.db');
 const runner = new Runner(store, createChecker());
-const server = createApp({ store, runner }).listen(port, '127.0.0.1', () => {
+const host = process.env.HOST ?? '127.0.0.1';
+const isLoopbackHost = ['127.0.0.1', 'localhost', '::1'].includes(host);
+const publicDemo = process.env.PUBLIC_DEMO === 'true' ||
+  (process.env.PUBLIC_DEMO !== 'false' && isLoopbackHost);
+const server = createApp({ store, runner, demo: createDemoService(), publicDemo }).listen(port, host, () => {
   runner.start();
-  console.log(`API Health Monitor listening at http://localhost:${port}`);
+  console.log(`API Health Monitor listening at http://${host}:${port}`);
 });
 server.requestTimeout = 10000;
 server.headersTimeout = 10000;
