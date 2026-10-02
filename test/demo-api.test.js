@@ -49,3 +49,19 @@ test('static dashboard and public demo API can be disabled', async t => {
   assert.equal((await fetch(base)).status, 404);
   assert.equal((await fetch(`${base}/api/demo/scenarios`)).status, 404);
 });
+
+test('hosted demo blocks management even when the Host header claims localhost', async t => {
+  const base = await serve(t, createApp({ demo: createDemoService(), publicDemo: true, managementEnabled: false }));
+  for (const host of ['localhost', '127.0.0.1', '[::1]', 'public.example']) {
+    for (const path of ['/monitors', '/monitors/1/check', '/health']) {
+      const status = await new Promise((resolve, reject) => {
+        http.get(`${base}${path}`, { headers: { host } }, response => {
+          response.resume();
+          resolve(response.statusCode);
+        }).on('error', reject);
+      });
+      assert.equal(status, 403);
+    }
+  }
+  assert.equal((await jsonRequest(base, '/api/demo/scenarios')).status, 200);
+});

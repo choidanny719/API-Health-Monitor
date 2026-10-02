@@ -17,9 +17,9 @@ test('server starts, persists a monitor across restart and exits on SIGTERM', { 
   await new Promise(resolve => portServer.close(resolve));
   const base = `http://127.0.0.1:${port}`;
 
-  async function start() {
+  async function start(host = '127.0.0.1') {
     const child = spawn(process.execPath, ['src/server.js'], {
-      env: { ...process.env, PORT: String(port), DB_PATH: join(dir, 'test.db'), HOST: '127.0.0.1', PUBLIC_DEMO: 'true' },
+      env: { ...process.env, PORT: String(port), DB_PATH: join(dir, 'test.db'), HOST: host, PUBLIC_DEMO: 'true' },
       stdio: ['ignore', 'pipe', 'pipe']
     });
     t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });
@@ -56,4 +56,10 @@ test('server starts, persists a monitor across restart and exits on SIGTERM', { 
   const second = await start();
   assert.deepEqual((await jsonRequest(base, `/monitors/${created.body.id}`)).body, created.body);
   await stop(second);
+  const hosted = await start('0.0.0.0');
+  assert.equal((await jsonRequest(base, '/api/demo/scenarios')).status, 200);
+  assert.equal((await jsonRequest(base, '/api/demo/run', 'POST', { scenario: 'healthy' })).status, 200);
+  assert.equal((await jsonRequest(base, '/monitors')).status, 403);
+  assert.equal((await jsonRequest(base, `/monitors/${created.body.id}/check`, 'POST')).status, 403);
+  await stop(hosted);
 });

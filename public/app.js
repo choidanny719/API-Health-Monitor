@@ -51,10 +51,11 @@ function render(data) {
   const status = document.querySelector('#service-status');
   const isUp = monitor.status === 'up';
   const isDown = monitor.status === 'down';
+  const hasRecovered = data.incidents.some(incident => incident.resolvedAt);
   status.className = `status-value ${isUp ? 'up' : isDown ? 'down' : 'pending'}`;
   status.textContent = isUp ? 'Operational' : isDown ? 'Incident open' : 'Degraded';
   document.querySelector('#service-subtitle').textContent = isUp
-    ? `Recovered · last checked ${formatTime(monitor.lastCheckedAt)}`
+    ? `${hasRecovered ? 'Recovered' : 'Healthy'} · last checked ${formatTime(monitor.lastCheckedAt)}`
     : isDown ? 'Three checks failed in a row' : 'A check did not meet the health rule';
   document.querySelector('#check-count').textContent = data.checks.length;
   document.querySelector('#failure-count').textContent = monitor.consecutiveFailures;

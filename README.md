@@ -35,4 +35,4 @@ Intervals range from 10 seconds to 24 hours. Optional rules include `expectedSta
 
 The dashboard runs healthy, wrong-JSON, slow-response, and outage-and-recovery scenarios with fixed sample responses. It uses the real checker and incident logic without contacting outside sites. `npm run demo` runs a terminal version; `npm test` runs the test suite.
 
-For hosting the dashboard, set `HOST=0.0.0.0` and `PUBLIC_DEMO=true`. The dashboard and its fixed demo routes become public; monitor-management routes remain local-only. `PUBLIC_DEMO=false` disables the dashboard.
+For hosting, `render.yaml` configures a free Render web service from `demo-dashboard` with manual deployments. It sets `HOST=0.0.0.0` and `PUBLIC_DEMO=true`. Binding to a non-loopback address disables monitor management and scheduled checks. Only the dashboard and fixed demo routes are exposed. Demo state resets each run. `PUBLIC_DEMO=false` disables the dashboard.

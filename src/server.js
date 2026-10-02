@@ -15,8 +15,8 @@ const host = process.env.HOST ?? '127.0.0.1';
 const isLoopbackHost = ['127.0.0.1', 'localhost', '::1'].includes(host);
 const publicDemo = process.env.PUBLIC_DEMO === 'true' ||
   (process.env.PUBLIC_DEMO !== 'false' && isLoopbackHost);
-const server = createApp({ store, runner, demo: createDemoService(), publicDemo }).listen(port, host, () => {
-  runner.start();
+const server = createApp({ store, runner, demo: createDemoService(), publicDemo, managementEnabled: isLoopbackHost }).listen(port, host, () => {
+  if (isLoopbackHost) runner.start();
   console.log(`API Health Monitor listening at http://${host}:${port}`);
 });
 server.requestTimeout = 10000;

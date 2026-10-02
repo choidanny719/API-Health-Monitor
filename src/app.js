@@ -7,7 +7,7 @@ const publicDirectory = fileURLToPath(new URL('../public/', import.meta.url));
 const localHosts = ['localhost', '127.0.0.1', '[::1]'];
 const demoFiles = new Set(['/', '/index.html', '/styles.css', '/app.js', '/favicon.svg']);
 
-export function createApp({ store, runner, demo, publicDemo = false } = {}) {
+export function createApp({ store, runner, demo, publicDemo = false, managementEnabled = true } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.use((req, res, next) => {
@@ -34,7 +34,7 @@ export function createApp({ store, runner, demo, publicDemo = false } = {}) {
       res.set('Cache-Control', 'no-store');
       return next();
     }
-    if (!localHosts.includes(req.hostname)) {
+    if (!managementEnabled || !localHosts.includes(req.hostname)) {
       return res.status(403).json({ error: 'Only local requests are accepted' });
     }
     if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
