@@ -107,30 +107,38 @@ export class Store {
     return this.transaction(() => {
       const entry = this.db.prepare('INSERT INTO checks (monitor_id, revision, result) VALUES (?, ?, ?)')
         .run(monitor.id, monitor.revision, JSON.stringify(result));
-      const failures = result.ok ? 0 : row.failure_count + 1;
-      const status = result.ok ? 'up' : failures >= 3 ? 'down' : row.status;
-      this.db.prepare(`
-        UPDATE monitors SET status = ?, failure_count = ?, last_checked_at = ?, next_check_at = ? WHERE id = ?
-      `).run(status, failures, Date.parse(result.checkedAt), now + monitor.intervalSeconds * 1000, monitor.id);
-      if (result.ok) {
-        this.resolveIncident(monitor.id, result.checkedAt, 'recovered');
-      } else if (failures >= 3) {
-        this.db.prepare(`
-          INSERT OR IGNORE INTO incidents (monitor_id, opened_at, failure_code, message) VALUES (?, ?, ?, ?)
-        `).run(monitor.id, result.checkedAt, result.failureCode, result.message);
-      }
-      this.db.prepare(`
-        DELETE FROM checks WHERE monitor_id = ? AND id NOT IN (
-          SELECT id FROM checks WHERE monitor_id = ? ORDER BY id DESC LIMIT 1000
-        )
-      `).run(monitor.id, monitor.id);
-      this.db.prepare(`
-        DELETE FROM incidents WHERE monitor_id = ? AND id NOT IN (
-          SELECT id FROM incidents WHERE monitor_id = ? ORDER BY id DESC LIMIT 100
-        )
-      `).run(monitor.id, monitor.id);
+      this.#updateHealth(row, result, now + monitor.intervalSeconds * 1000);
+      this.#pruneHistory(monitor.id);
       return { id: Number(entry.lastInsertRowid), monitorId: monitor.id, revision: monitor.revision, ...result };
     });
+  }
+
+  #updateHealth(row, result, nextCheckAt) {
+    const failures = result.ok ? 0 : row.failure_count + 1;
+    const status = result.ok ? 'up' : failures >= 3 ? 'down' : row.status;
+    this.db.prepare(`
+      UPDATE monitors SET status = ?, failure_count = ?, last_checked_at = ?, next_check_at = ? WHERE id = ?
+    `).run(status, failures, Date.parse(result.checkedAt), nextCheckAt, row.id);
+    if (result.ok) {
+      this.resolveIncident(row.id, result.checkedAt, 'recovered');
+    } else if (failures >= 3) {
+      this.db.prepare(`
+        INSERT OR IGNORE INTO incidents (monitor_id, opened_at, failure_code, message) VALUES (?, ?, ?, ?)
+      `).run(row.id, result.checkedAt, result.failureCode, result.message);
+    }
+  }
+
+  #pruneHistory(id) {
+    this.db.prepare(`
+      DELETE FROM checks WHERE monitor_id = ? AND id NOT IN (
+        SELECT id FROM checks WHERE monitor_id = ? ORDER BY id DESC LIMIT 1000
+      )
+    `).run(id, id);
+    this.db.prepare(`
+      DELETE FROM incidents WHERE monitor_id = ? AND id NOT IN (
+        SELECT id FROM incidents WHERE monitor_id = ? ORDER BY id DESC LIMIT 100
+      )
+    `).run(id, id);
   }
 
   checks(id, limit) {

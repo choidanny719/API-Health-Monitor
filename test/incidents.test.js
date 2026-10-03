@@ -69,3 +69,36 @@ test('a database failure rolls back the check and monitor state together', t => 
   assert.equal(store.checks(monitor.id, 100).length, 0);
   assert.equal(store.get(monitor.id).consecutiveFailures, 0);
 });
+
+test('an incident write failure rolls back the third check and its schedule', t => {
+  const store = new Store();
+  t.after(() => store.close());
+  const monitor = store.create(config);
+  store.record(monitor, failed);
+  store.record(monitor, failed);
+  const before = store.get(monitor.id);
+  const checks = store.checks(monitor.id, 100);
+  store.db.exec(`CREATE TRIGGER fail_incident BEFORE INSERT ON incidents BEGIN SELECT RAISE(ABORT, 'incident failure'); END;`);
+  assert.throws(() => store.record(monitor, failed, Date.now() + 60000), /incident failure/);
+  assert.deepEqual(store.get(monitor.id), before);
+  assert.deepEqual(store.checks(monitor.id, 100), checks);
+  assert.deepEqual(store.incidents(monitor.id, 100), []);
+});
+
+test('incident retention keeps the latest 100 without affecting another monitor', t => {
+  const store = new Store();
+  t.after(() => store.close());
+  const monitor = store.create(config);
+  const other = store.create({ ...config, name: 'Search' });
+  for (let i = 0; i < 3; i++) store.record(other, failed);
+  const otherIncidents = store.incidents(other.id, 100);
+  const incidents = [];
+  for (let i = 0; i < 101; i++) {
+    for (let j = 0; j < 3; j++) store.record(monitor, failed);
+    if (i < 100) store.record(monitor, healthy);
+    incidents.push(store.incidents(monitor.id, 1)[0]);
+  }
+  assert.deepEqual(store.incidents(monitor.id, 100), incidents.slice(-100).reverse());
+  assert.equal(store.incidents(monitor.id, 1)[0].resolvedAt, null);
+  assert.deepEqual(store.incidents(other.id, 100), otherIncidents);
+});

@@ -21,10 +21,15 @@ test('manual checks save history, enforce limits and disappear with the monitor'
   assert.equal((await jsonRequest(base, `${path}/checks?limit=1`)).body.length, 1);
   assert.equal((await jsonRequest(base, `${path}/checks?limit=-1`)).status, 400);
   assert.equal((await jsonRequest(base, `${path}/checks?limit=101`)).status, 400);
-  for (let i = 0; i < 1005; i++) store.record(monitor, result);
-  assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM checks').get().count, 1000);
+  const other = store.create(validateMonitor({ name: 'Search', url: 'https://example.com/search' }));
+  const otherCheck = store.record(other, result);
+  const checks = [];
+  for (let i = 0; i < 1005; i++) checks.push(store.record(monitor, result));
+  assert.deepEqual(store.checks(monitor.id, 1000), checks.slice(-1000).reverse());
+  assert.deepEqual(store.checks(other.id, 100), [otherCheck]);
   store.delete(monitor.id);
-  assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM checks').get().count, 0);
+  assert.deepEqual(store.checks(other.id, 100), [otherCheck]);
+  assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM checks').get().count, 1);
 });
 
 test('a completed check cannot overwrite a changed or deleted monitor', t => {
