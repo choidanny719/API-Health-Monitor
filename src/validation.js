@@ -17,6 +17,27 @@ function integer(value, name, min, max) {
   }
 }
 
+function validJsonPath(path) {
+  return typeof path === 'string' && path.length <= 200 &&
+    /^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(path) &&
+    !path.split('.').some(part => ['__proto__', 'prototype', 'constructor'].includes(part));
+}
+
+function validJsonValue(value) {
+  if (typeof value === 'string') return value.length <= 1000;
+  if (typeof value === 'number') return Number.isFinite(value);
+  return value === null || typeof value === 'boolean';
+}
+
+function validateExpectedJson(rule) {
+  if (rule === null) return;
+  if (!rule || typeof rule !== 'object' || Array.isArray(rule) ||
+    Object.keys(rule).length !== 2 || !Object.hasOwn(rule, 'equals') ||
+    !validJsonPath(rule.path) || !validJsonValue(rule.equals)) {
+    throw new HttpError(400, 'expectedJson must contain a dot-separated path and a primitive equals value');
+  }
+}
+
 export function validateMonitor(body, current) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     throw new HttpError(400, 'Body must be a JSON object');
@@ -41,19 +62,7 @@ export function validateMonitor(body, current) {
   }
   if (config.maxResponseMs !== null) integer(config.maxResponseMs, 'maxResponseMs', 1, config.timeoutMs);
   if (typeof config.enabled !== 'boolean') throw new HttpError(400, 'enabled must be a boolean');
-  if (config.expectedJson !== null) {
-    const rule = config.expectedJson;
-    if (!rule || typeof rule !== 'object' || Array.isArray(rule) ||
-      Object.keys(rule).length !== 2 || !Object.hasOwn(rule, 'equals') ||
-      typeof rule.path !== 'string' || rule.path.length > 200 ||
-      !/^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(rule.path) ||
-      rule.path.split('.').some(part => ['__proto__', 'prototype', 'constructor'].includes(part)) ||
-      (rule.equals !== null && !['string', 'number', 'boolean'].includes(typeof rule.equals)) ||
-      (typeof rule.equals === 'number' && !Number.isFinite(rule.equals)) ||
-      (typeof rule.equals === 'string' && rule.equals.length > 1000)) {
-      throw new HttpError(400, 'expectedJson must contain a dot-separated path and a primitive equals value');
-    }
-  }
+  validateExpectedJson(config.expectedJson);
   return Object.fromEntries(fields.map(field => [field, config[field]]));
 }
 
