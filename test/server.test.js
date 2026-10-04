@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import net from 'node:net';
+import { promisify } from 'node:util';
 import { jsonRequest } from './helpers.js';
 
 test('server starts, persists a monitor across restart and exits on SIGTERM', { timeout: 10000 }, async t => {
@@ -46,4 +47,44 @@ test('server starts, persists a monitor across restart and exits on SIGTERM', { 
   const second = await start();
   assert.deepEqual((await jsonRequest(base, `/monitors/${created.body.id}`)).body, created.body);
   await stop(second);
+});
+
+function temporaryDirectory(t) {
+  const directory = mkdtempSync(join(tmpdir(), 'startup-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  return directory;
+}
+
+async function expectStartupFailure(env, message) {
+  await assert.rejects(promisify(execFile)(process.execPath, ['src/server.js'], {
+    env: { ...process.env, ...env }, timeout: 3000
+  }), error => {
+    assert.equal(error.code, 1);
+    assert.equal(error.signal, null);
+    assert.match(error.stderr, message);
+    assert.doesNotMatch(error.stdout, /listening/);
+    return true;
+  });
+}
+
+test('server rejects invalid PORT settings before listening', async t => {
+  const path = join(temporaryDirectory(t), 'test.db');
+  for (const port of ['', '0', '-1', '65536', '3.5', 'abc', 'Infinity']) {
+    await expectStartupFailure({ PORT: port, DB_PATH: path }, /PORT must be an integer between 1 and 65535/);
+  }
+});
+
+test('server exits when its port is already in use', async t => {
+  const path = join(temporaryDirectory(t), 'test.db');
+  const listener = net.createServer();
+  listener.listen(0, '127.0.0.1');
+  await once(listener, 'listening');
+  t.after(() => new Promise(resolve => listener.close(resolve)));
+  await expectStartupFailure({ PORT: String(listener.address().port), DB_PATH: path }, /EADDRINUSE/);
+});
+
+test('server exits when the database directory cannot be created', async t => {
+  const path = join(temporaryDirectory(t), 'file');
+  writeFileSync(path, 'not a directory');
+  await expectStartupFailure({ PORT: '3000', DB_PATH: join(path, 'test.db') }, /EEXIST|ENOTDIR/);
 });

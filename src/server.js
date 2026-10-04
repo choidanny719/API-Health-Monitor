@@ -10,7 +10,13 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 
 const store = new Store(process.env.DB_PATH ?? 'data/monitor.db');
 const runner = new Runner(store, createChecker());
-const server = createApp({ store, runner }).listen(port, '127.0.0.1', () => {
+const server = createApp({ store, runner }).listen(port, '127.0.0.1', error => {
+  if (error) {
+    console.error(error.message);
+    store.close();
+    process.exitCode = 1;
+    return;
+  }
   runner.start();
   console.log(`API Health Monitor listening at http://localhost:${port}`);
 });
