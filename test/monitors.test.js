@@ -77,3 +77,42 @@ test('rejects numeric expectations that would change when saved as JSON', async 
   assert.equal(response.status, 400);
   assert.equal(store.list().length, 0);
 });
+
+test('accepts 100 monitors, rejects the next one and reuses capacity after deletion', async t => {
+  const store = new Store();
+  t.after(() => store.close());
+  const base = await serve(t, createApp({ store }));
+  const ids = [];
+  for (let i = 0; i < 100; i++) {
+    const response = await jsonRequest(base, '/monitors', 'POST', { ...config, name: `Monitor ${i}` });
+    assert.equal(response.status, 201);
+    ids.push(response.body.id);
+  }
+  const before = store.list();
+  const rejected = await jsonRequest(base, '/monitors', 'POST', config);
+  assert.deepEqual(rejected, { status: 409, body: { error: 'The limit is 100 monitors' } });
+  assert.deepEqual(store.list(), before);
+  const updated = await jsonRequest(base, `/monitors/${ids[0]}`, 'PATCH', { name: 'Renamed at capacity' });
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.name, 'Renamed at capacity');
+  assert.equal((await fetch(`${base}/monitors/${ids[0]}`, { method: 'DELETE' })).status, 204);
+  const replacement = await jsonRequest(base, '/monitors', 'POST', config);
+  assert.equal(replacement.status, 201);
+  assert.equal(store.list().length, 100);
+  assert.ok(!ids.includes(replacement.body.id));
+});
+
+test('rejects invalid updates without changing configuration, revision or history', async t => {
+  const store = new Store();
+  t.after(() => store.close());
+  const monitor = store.create(validateMonitor(config));
+  const before = store.get(monitor.id);
+  const base = await serve(t, createApp({ store }));
+  for (const patch of [{}, { name: ' ' }, { intervalSeconds: 10, timeoutMs: 10001 },
+    { timeoutMs: 100, maxResponseMs: 101 }, { unknown: true }]) {
+    const response = await jsonRequest(base, `/monitors/${monitor.id}`, 'PATCH', patch);
+    assert.equal(response.status, 400);
+    assert.deepEqual(store.get(monitor.id), before);
+    assert.deepEqual(store.checks(monitor.id, 100), []);
+  }
+});
