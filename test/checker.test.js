@@ -92,3 +92,29 @@ test('HTTP transport pins DNS, refuses redirects, caps bodies and aborts slow re
   await assert.rejects(requestTarget(url('/slow'), target, AbortSignal.timeout(100)), { name: 'AbortError' });
   assert.equal(redirectedRequests, 0);
 });
+
+test('response limits count bytes at 64 KiB for fixed and chunked bodies', async t => {
+  const exact = 'é'.repeat(32768);
+  assert.equal(Buffer.byteLength(exact), 65536);
+  const base = await serve(t, http.createServer((req, res) => {
+    const path = new URL(req.url, 'http://fixture');
+    const body = Buffer.from(exact + (path.searchParams.has('over') ? 'a' : ''));
+    if (path.searchParams.has('chunked')) {
+      res.write(body.subarray(0, 32000));
+      res.end(body.subarray(32000));
+    } else {
+      res.setHeader('content-length', body.length);
+      res.end(body);
+    }
+  }));
+  const target = { address: '127.0.0.1', family: 4 };
+  for (const transfer of ['', 'chunked=1&']) {
+    const accepted = await requestTarget(new URL(`${base}/?${transfer}`), target, AbortSignal.timeout(2000));
+    assert.equal(accepted.statusCode, 200);
+    assert.equal(accepted.body, exact);
+    await assert.rejects(
+      requestTarget(new URL(`${base}/?${transfer}over=1`), target, AbortSignal.timeout(2000)),
+      { code: 'response_too_large' }
+    );
+  }
+});

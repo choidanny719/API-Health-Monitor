@@ -42,3 +42,31 @@ test('a completed check cannot overwrite a changed or deleted monitor', t => {
   store.delete(monitor.id);
   assert.equal(store.record(monitor, result), null);
 });
+
+test('both history routes apply limits, preserve order and reject malformed parameters', async t => {
+  const store = new Store();
+  t.after(() => store.close());
+  const monitor = store.create(validateMonitor({ name: 'Catalog', url: 'https://example.com' }));
+  const failure = { ...result, ok: false, statusCode: 503, failureCode: 'status_mismatch', message: 'Unavailable' };
+  for (let i = 0; i < 60; i++) {
+    for (let j = 0; j < 3; j++) store.record(monitor, failure);
+    store.record(monitor, result);
+  }
+  const base = await serve(t, createApp({ store }));
+  for (const route of ['checks', 'incidents']) {
+    const path = `/monitors/${monitor.id}/${route}`;
+    const expected = store[route](monitor.id, 1000);
+    for (const [query, limit] of [['', 50], ['?limit=1', 1], ['?limit=100', 100]]) {
+      const response = await jsonRequest(base, path + query);
+      assert.equal(response.status, 200);
+      assert.deepEqual(response.body, expected.slice(0, limit));
+    }
+    for (const query of ['limit=', 'limit=0', 'limit=101', 'limit=1.5', 'limit=1e2',
+      'limit=%201', 'limit=abc', 'limit=1&limit=2']) {
+      const response = await jsonRequest(base, `${path}?${query}`);
+      assert.equal(response.status, 400, `${route}?${query}`);
+      assert.equal(typeof response.body.error, 'string');
+    }
+    assert.equal((await jsonRequest(base, `/monitors/missing/${route}`)).status, 404);
+  }
+});
