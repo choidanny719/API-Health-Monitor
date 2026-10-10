@@ -16,13 +16,21 @@ The API listens at `http://localhost:3000`. Data is saved to `data/monitor.db`. 
 ## Try it
 
 ```sh
+# Create a monitor with a 60-second check interval
 curl -X POST http://localhost:3000/monitors \
   -H 'Content-Type: application/json' \
   -d '{"name":"Example","url":"https://example.com","intervalSeconds":60}'
 
+# List monitors and their current status
 curl http://localhost:3000/monitors
+
+# Run a check now and save the result
 curl -X POST http://localhost:3000/monitors/ID/check
+
+# View recent check results
 curl http://localhost:3000/monitors/ID/checks
+
+# View open and resolved incidents
 curl http://localhost:3000/monitors/ID/incidents
 ```
 
