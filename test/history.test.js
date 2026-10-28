@@ -70,3 +70,45 @@ test('both history routes apply limits, preserve order and reject malformed para
     assert.equal((await jsonRequest(base, `/monitors/missing/${route}`)).status, 404);
   }
 });
+
+test('a retention failure rolls back the new check and health update', t => {
+  const store = new Store();
+  t.after(() => store.close());
+  const monitor = store.create(validateMonitor({ name: 'Catalog', url: 'https://example.com' }));
+  for (let i = 0; i < 1000; i++) store.record(monitor, result, i);
+  const before = store.get(monitor.id);
+  const checks = store.checks(monitor.id, 1000);
+  const failed = { ...result, ok: false, failureCode: 'timeout', message: 'Check stopped before completion' };
+  store.db.exec(`CREATE TRIGGER fail_pruning BEFORE DELETE ON checks BEGIN SELECT RAISE(ABORT, 'pruning failed'); END;`);
+  assert.throws(() => store.record(monitor, failed, 1000), /pruning failed/);
+  assert.deepEqual(store.get(monitor.id), before);
+  assert.deepEqual(store.checks(monitor.id, 1000), checks);
+  store.db.exec('DROP TRIGGER fail_pruning');
+  const saved = store.record(monitor, failed, 1000);
+  assert.deepEqual(store.checks(monitor.id, 1000), [saved, ...checks.slice(0, 999)]);
+  assert.equal(store.get(monitor.id).consecutiveFailures, 1);
+});
+
+test('deleting a monitor removes its checks and incidents while preserving other monitors', t => {
+  const store = new Store();
+  t.after(() => store.close());
+  const config = validateMonitor({ name: 'Catalog', url: 'https://example.com' });
+  const monitor = store.create(config);
+  const other = store.create({ ...config, name: 'Search' });
+  const failed = { ...result, ok: false, failureCode: 'timeout', message: 'Check stopped before completion' };
+  for (const current of [monitor, other]) {
+    for (let i = 0; i < 3; i++) store.record(current, failed);
+  }
+  const before = store.get(other.id);
+  const checks = store.checks(other.id, 100);
+  const incidents = store.incidents(other.id, 100);
+  store.delete(monitor.id);
+  assert.throws(() => store.get(monitor.id), { status: 404 });
+  assert.throws(() => store.checks(monitor.id, 100), { status: 404 });
+  assert.throws(() => store.incidents(monitor.id, 100), { status: 404 });
+  assert.deepEqual(store.list(), [before]);
+  assert.deepEqual(store.checks(other.id, 100), checks);
+  assert.deepEqual(store.incidents(other.id, 100), incidents);
+  assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM checks').get().count, checks.length);
+  assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM incidents').get().count, incidents.length);
+});

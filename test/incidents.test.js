@@ -102,3 +102,117 @@ test('incident retention keeps the latest 100 without affecting another monitor'
   assert.equal(store.incidents(monitor.id, 1)[0].resolvedAt, null);
   assert.deepEqual(store.incidents(other.id, 100), otherIncidents);
 });
+
+test('each outage keeps its opening cause and a later outage gets a new incident', t => {
+  const store = new Store();
+  t.after(() => store.close());
+  const monitor = store.create(config, 0);
+  const record = (result, at) => store.record(monitor, {
+    ...result, checkedAt: new Date(at).toISOString()
+  }, at);
+  record(failed, 1000);
+  record(failed, 2000);
+  assert.equal(store.get(monitor.id).status, 'pending');
+  assert.deepEqual(store.incidents(monitor.id, 100), []);
+  record(failed, 3000);
+  const first = store.incidents(monitor.id, 1)[0];
+  assert.equal(first.openedAt, new Date(3000).toISOString());
+  assert.equal(first.failureCode, failed.failureCode);
+  assert.equal(first.message, failed.message);
+  const timeout = { ...failed, statusCode: null, failureCode: 'timeout', message: 'Check stopped before completion' };
+  record(timeout, 4000);
+  assert.deepEqual(store.incidents(monitor.id, 100), [first]);
+  record(healthy, 5000);
+  const resolved = { ...first, resolvedAt: new Date(5000).toISOString(), resolution: 'recovered' };
+  assert.deepEqual(store.incidents(monitor.id, 100), [resolved]);
+  record(timeout, 6000);
+  record(timeout, 7000);
+  assert.equal(store.get(monitor.id).status, 'up');
+  record(timeout, 8000);
+  const [second, previous] = store.incidents(monitor.id, 100);
+  assert.notEqual(second.id, first.id);
+  assert.equal(second.openedAt, new Date(8000).toISOString());
+  assert.equal(second.failureCode, 'timeout');
+  assert.equal(second.resolvedAt, null);
+  assert.deepEqual(previous, resolved);
+  assert.equal(store.get(monitor.id).consecutiveFailures, 3);
+});
+
+test('cancellation leaves an open incident, schedule and history unchanged', t => {
+  const store = new Store();
+  t.after(() => store.close());
+  const monitor = store.create(config, 0);
+  for (let i = 0; i < 3; i++) store.record(monitor, failed, i * 1000);
+  const before = store.get(monitor.id);
+  const checks = store.checks(monitor.id, 100);
+  const incidents = store.incidents(monitor.id, 100);
+  assert.equal(store.record(monitor, { ...failed, failureCode: 'cancelled' }, 10000), null);
+  assert.deepEqual(store.get(monitor.id), before);
+  assert.deepEqual(store.checks(monitor.id, 100), checks);
+  assert.deepEqual(store.incidents(monitor.id, 100), incidents);
+});
+
+test('configuration changes retain old history and start a fresh revision', t => {
+  const store = new Store();
+  t.after(() => store.close());
+  const monitor = store.create(config, 0);
+  for (let i = 0; i < 3; i++) store.record(monitor, failed, i * 1000);
+  const checks = store.checks(monitor.id, 100);
+  const incident = store.incidents(monitor.id, 1)[0];
+  const changedAt = Date.parse(healthy.checkedAt);
+  const updated = store.update(monitor.id, { ...config, enabled: false, intervalSeconds: 120 }, changedAt);
+  assert.equal(updated.revision, 2);
+  assert.equal(updated.status, 'pending');
+  assert.equal(updated.consecutiveFailures, 0);
+  assert.equal(updated.lastCheckedAt, null);
+  assert.equal(updated.createdAt, monitor.createdAt);
+  assert.equal(updated.updatedAt, healthy.checkedAt);
+  assert.equal(updated.nextCheckAt, healthy.checkedAt);
+  assert.deepEqual(store.checks(monitor.id, 100), checks);
+  assert.deepEqual(store.incidents(monitor.id, 100), [{
+    ...incident, resolvedAt: healthy.checkedAt, resolution: 'configuration_changed'
+  }]);
+  const check = store.record(updated, healthy, changedAt);
+  assert.equal(check.revision, 2);
+  assert.deepEqual(store.checks(monitor.id, 100), [check, ...checks]);
+  assert.equal(store.get(monitor.id).nextCheckAt, new Date(changedAt + 120000).toISOString());
+  assert.deepEqual(store.due(changedAt + 120000), []);
+});
+
+test('failed recovery rolls back health, history and incident resolution and can be retried', t => {
+  const store = new Store();
+  t.after(() => store.close());
+  const monitor = store.create(config);
+  for (let i = 0; i < 3; i++) store.record(monitor, failed);
+  const before = store.get(monitor.id);
+  const checks = store.checks(monitor.id, 100);
+  const incidents = store.incidents(monitor.id, 100);
+  store.db.exec(`CREATE TRIGGER fail_resolution BEFORE UPDATE ON incidents BEGIN SELECT RAISE(ABORT, 'resolution failed'); END;`);
+  assert.throws(() => store.record(monitor, healthy), /resolution failed/);
+  assert.deepEqual(store.get(monitor.id), before);
+  assert.deepEqual(store.checks(monitor.id, 100), checks);
+  assert.deepEqual(store.incidents(monitor.id, 100), incidents);
+  store.db.exec('DROP TRIGGER fail_resolution');
+  store.record(monitor, healthy);
+  assert.equal(store.get(monitor.id).status, 'up');
+  assert.equal(store.checks(monitor.id, 100).length, checks.length + 1);
+  assert.equal(store.incidents(monitor.id, 1)[0].resolution, 'recovered');
+});
+
+test('failed incident resolution rolls back a configuration edit and its revision', t => {
+  const store = new Store();
+  t.after(() => store.close());
+  const monitor = store.create(config);
+  for (let i = 0; i < 3; i++) store.record(monitor, failed);
+  const before = store.get(monitor.id);
+  const checks = store.checks(monitor.id, 100);
+  const incidents = store.incidents(monitor.id, 100);
+  store.db.exec(`CREATE TRIGGER fail_edit BEFORE UPDATE ON incidents BEGIN SELECT RAISE(ABORT, 'edit failed'); END;`);
+  assert.throws(() => store.update(monitor.id, { ...config, enabled: false }), /edit failed/);
+  assert.deepEqual(store.get(monitor.id), before);
+  assert.deepEqual(store.checks(monitor.id, 100), checks);
+  assert.deepEqual(store.incidents(monitor.id, 100), incidents);
+  store.db.exec('DROP TRIGGER fail_edit');
+  assert.equal(store.update(monitor.id, { ...config, enabled: false }).revision, 2);
+  assert.equal(store.incidents(monitor.id, 1)[0].resolution, 'configuration_changed');
+});
