@@ -4,6 +4,7 @@ import { Store } from '../src/store.js';
 import { Runner } from '../src/runner.js';
 import { createChecker } from '../src/checker.js';
 import { validateMonitor } from '../src/validation.js';
+import { setImmediate as settle } from 'node:timers/promises';
 
 const config = validateMonitor({ name: 'Catalog', url: 'https://example.com/health', intervalSeconds: 10 });
 const healthy = { checkedAt: new Date().toISOString(), ok: true, statusCode: 200, durationMs: 1, failureCode: null, message: null };
@@ -168,4 +169,117 @@ test('stopping an idle runner is repeatable and prevents future scheduling', asy
   assert.equal(runner.active.size, 0);
   assert.deepEqual(store.checks(monitor.id, 100), []);
   await assert.rejects(runner.run(monitor.id), { status: 503, message: 'Checker is stopping' });
+});
+
+test('starting twice creates one polling timer and shutdown prevents later checks', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const store = new Store();
+  const monitor = store.create(config, 0);
+  let now = 0;
+  let calls = 0;
+  const errors = [];
+  const runner = new Runner(store, async () => { calls++; return healthy; }, {
+    now: () => now, onError: error => errors.push(error)
+  });
+  t.after(async () => { await runner.stop(); store.close(); });
+  runner.start();
+  const timer = runner.timer;
+  runner.start();
+  await settle();
+  assert.equal(runner.timer, timer);
+  assert.equal(calls, 1);
+  assert.equal(store.checks(monitor.id, 100).length, 1);
+  now = 9999;
+  t.mock.timers.tick(9999);
+  await settle();
+  assert.equal(calls, 1);
+  now = 10000;
+  t.mock.timers.tick(1);
+  await settle();
+  assert.equal(calls, 2);
+  assert.equal(store.checks(monitor.id, 100).length, 2);
+  await runner.stop();
+  now = 20000;
+  t.mock.timers.tick(10000);
+  await settle();
+  assert.equal(calls, 2);
+  assert.deepEqual(errors, []);
+});
+
+test('a failed polling query is reported once and the next timer tick recovers', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const store = new Store();
+  const monitor = store.create(config, 0);
+  const failure = new Error('Due query failed');
+  const due = t.mock.method(store, 'due', () => { throw failure; });
+  const errors = [];
+  const runner = new Runner(store, async () => healthy, { now: () => 0, onError: error => errors.push(error) });
+  t.after(async () => { await runner.stop(); store.close(); });
+  runner.start();
+  await settle();
+  assert.deepEqual(errors, [failure]);
+  assert.equal(runner.active.size, 0);
+  assert.deepEqual(store.checks(monitor.id, 100), []);
+  due.mock.restore();
+  t.mock.timers.tick(1000);
+  await settle();
+  assert.deepEqual(errors, [failure]);
+  assert.equal(store.get(monitor.id).status, 'up');
+  assert.equal(store.checks(monitor.id, 100).length, 1);
+});
+
+test('shutdown waits for every active task and discards late successful results', async t => {
+  const store = new Store();
+  const monitors = [store.create(config, 0), store.create(config, 1)];
+  const pending = monitors.map(() => Promise.withResolvers());
+  let calls = 0;
+  const runner = new Runner(store, () => pending[calls++].promise, { now: () => 1000 });
+  t.after(async () => {
+    pending.forEach(task => task.resolve(healthy));
+    await runner.stop();
+    store.close();
+  });
+  const failure = new Error('Late transport failure');
+  const first = assert.rejects(runner.run(monitors[0].id), { status: 409 });
+  const second = assert.rejects(runner.run(monitors[1].id), failure);
+  let stopped = false;
+  const stopping = runner.stop().then(() => { stopped = true; });
+  assert.equal(runner.controller.signal.aborted, true);
+  await assert.rejects(runner.run(monitors[0].id), { status: 503 });
+  await settle();
+  assert.equal(stopped, false);
+  pending[0].resolve(healthy);
+  await first;
+  assert.equal(stopped, false);
+  assert.equal(runner.active.size, 1);
+  pending[1].reject(failure);
+  await Promise.all([second, stopping]);
+  assert.equal(stopped, true);
+  assert.equal(runner.active.size, 0);
+  for (const monitor of monitors) {
+    assert.equal(store.get(monitor.id).status, 'pending');
+    assert.deepEqual(store.checks(monitor.id, 100), []);
+    assert.deepEqual(store.incidents(monitor.id, 100), []);
+  }
+});
+
+test('scheduled checks start in due-time order and paused monitors do not use capacity', async t => {
+  const store = new Store();
+  const later = store.create(config, 2000);
+  const early = store.create(config, 1000);
+  store.create({ ...config, enabled: false }, 0);
+  const sameTime = store.create(config, 1000);
+  const started = [];
+  const runner = new Runner(store, async monitor => {
+    started.push(monitor.id);
+    return healthy;
+  }, { concurrency: 1, now: () => 2000 });
+  t.after(async () => { await runner.stop(); store.close(); });
+  const expected = [early.id, sameTime.id].sort().concat(later.id);
+  for (let count = 1; count <= expected.length; count++) {
+    await runner.tick();
+    assert.deepEqual(started, expected.slice(0, count));
+  }
+  await runner.tick();
+  assert.deepEqual(started, expected);
 });
