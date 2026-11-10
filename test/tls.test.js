@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test, { after, before } from 'node:test';
 import https from 'node:https';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { X509Certificate } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -21,8 +22,34 @@ before(async () => {
     '-nodes', '-days', '2', '-subj', '/CN=monitor.example.com',
     '-addext', 'subjectAltName=DNS:monitor.example.com',
     '-keyout', fixture('server-key.pem'), '-out', fixture('server-cert.pem')]);
-  await execute('openssl', ['x509', '-in', fixture('server-cert.pem'), '-signkey', fixture('server-key.pem'),
-    '-days', '-1', '-out', fixture('expired-cert.pem')]);
+  writeFileSync(fixture('index.txt'), '');
+  writeFileSync(fixture('serial'), '1000\n');
+  writeFileSync(fixture('ca.cnf'), `
+[ca]
+default_ca = local
+[local]
+database = ${fixture('index.txt')}
+serial = ${fixture('serial')}
+new_certs_dir = ${directory}
+certificate = ${fixture('server-cert.pem')}
+private_key = ${fixture('server-key.pem')}
+default_md = sha256
+policy = subject
+x509_extensions = extensions
+[subject]
+commonName = supplied
+[extensions]
+subjectAltName = DNS:monitor.example.com
+`);
+  await execute('openssl', ['req', '-new', '-key', fixture('server-key.pem'),
+    '-subj', '/CN=monitor.example.com', '-out', fixture('server.csr')]);
+  await execute('openssl', ['ca', '-batch', '-selfsign', '-notext',
+    '-config', fixture('ca.cnf'), '-in', fixture('server.csr'),
+    '-startdate', '20200101000000Z', '-enddate', '20200102000000Z',
+    '-out', fixture('expired-cert.pem')]);
+  const expired = new X509Certificate(readFileSync(fixture('expired-cert.pem')));
+  assert.ok(Date.parse(expired.validFrom) < Date.parse(expired.validTo));
+  assert.ok(Date.parse(expired.validTo) < Date.now());
 });
 
 after(() => {
