@@ -216,3 +216,70 @@ test('failed incident resolution rolls back a configuration edit and its revisio
   assert.equal(store.update(monitor.id, { ...config, enabled: false }).revision, 2);
   assert.equal(store.incidents(monitor.id, 1)[0].resolution, 'configuration_changed');
 });
+
+test('cancelled checks neither count toward nor reset a two-failure streak', async t => {
+  for (const initialStatus of ['pending', 'up']) {
+    await t.test(initialStatus, t => {
+      const store = new Store();
+      t.after(() => store.close());
+      const monitor = store.create(config, 0);
+      if (initialStatus === 'up') store.record(monitor, healthy, 0);
+      store.record(monitor, failed, 1000);
+      store.record(monitor, failed, 2000);
+      const before = store.get(monitor.id);
+      const checks = store.checks(monitor.id, 100);
+      assert.equal(before.status, initialStatus);
+      assert.equal(before.consecutiveFailures, 2);
+      assert.equal(store.record(monitor, { ...failed, failureCode: 'cancelled' }, 3000), null);
+      assert.deepEqual(store.get(monitor.id), before);
+      assert.deepEqual(store.checks(monitor.id, 100), checks);
+      assert.deepEqual(store.incidents(monitor.id, 100), []);
+      const third = { ...failed, checkedAt: new Date(4000).toISOString() };
+      store.record(monitor, third, 4000);
+      assert.equal(store.get(monitor.id).status, 'down');
+      assert.equal(store.get(monitor.id).consecutiveFailures, 3);
+      assert.equal(store.checks(monitor.id, 100).length, checks.length + 1);
+      const [incident] = store.incidents(monitor.id, 100);
+      assert.equal(store.incidents(monitor.id, 100).length, 1);
+      assert.equal(incident.openedAt, third.checkedAt);
+      assert.equal(incident.resolvedAt, null);
+    });
+  }
+});
+
+test('failed incident pruning restores checks removed earlier in the transaction', t => {
+  const store = new Store();
+  t.after(() => store.close());
+  const monitor = store.create(config, 0);
+  for (let i = 0; i < 100; i++) {
+    for (let j = 0; j < 3; j++) store.record(monitor, failed, i);
+    store.record(monitor, healthy, i);
+  }
+  for (let i = 400; i < 998; i++) store.record(monitor, healthy, i);
+  store.record(monitor, failed, 998);
+  store.record(monitor, failed, 999);
+  const before = store.get(monitor.id);
+  const checks = store.checks(monitor.id, 1000);
+  const incidents = store.incidents(monitor.id, 100);
+  assert.equal(checks.length, 1000);
+  assert.equal(incidents.length, 100);
+  store.db.exec(`
+    CREATE TRIGGER fail_incident_pruning BEFORE DELETE ON incidents
+    BEGIN SELECT RAISE(ABORT, 'incident pruning failed'); END;
+  `);
+  assert.throws(() => store.record(monitor, failed, 1000), /incident pruning failed/);
+  assert.deepEqual(store.get(monitor.id), before);
+  assert.deepEqual(store.checks(monitor.id, 1000), checks);
+  assert.deepEqual(store.incidents(monitor.id, 100), incidents);
+  store.db.exec('DROP TRIGGER fail_incident_pruning');
+
+  const saved = store.record(monitor, failed, 1000);
+  assert.deepEqual(store.checks(monitor.id, 1000), [saved, ...checks.slice(0, 999)]);
+  const retained = store.incidents(monitor.id, 100);
+  assert.equal(retained.length, 100);
+  assert.equal(retained[0].resolvedAt, null);
+  assert.equal(retained[0].openedAt, failed.checkedAt);
+  assert.deepEqual(retained.slice(1), incidents.slice(0, 99));
+  assert.equal(store.get(monitor.id).status, 'down');
+  assert.equal(store.get(monitor.id).consecutiveFailures, 3);
+});

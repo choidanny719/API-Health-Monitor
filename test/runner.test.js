@@ -283,3 +283,60 @@ test('scheduled checks start in due-time order and paused monitors do not use ca
   await runner.tick();
   assert.deepEqual(started, expected);
 });
+
+test('failed recovery persistence defers the monitor and the next due check resolves its incident', async t => {
+  const store = new Store();
+  const monitor = store.create(config, 0);
+  for (let i = 0; i < 3; i++) {
+    store.record(monitor, {
+      ...healthy, checkedAt: new Date(i * 1000).toISOString(), ok: false,
+      statusCode: 503, failureCode: 'status_mismatch', message: 'Unavailable'
+    }, i * 1000);
+  }
+  const before = store.get(monitor.id);
+  const checks = store.checks(monitor.id, 100);
+  const incidents = store.incidents(monitor.id, 100);
+  let now = Date.parse(before.nextCheckAt);
+  let calls = 0;
+  const errors = [];
+  const runner = new Runner(store, async () => {
+    calls++;
+    return { ...healthy, checkedAt: new Date(now).toISOString() };
+  }, { now: () => now, onError: error => errors.push(error) });
+  t.after(async () => { await runner.stop(); store.close(); });
+  store.db.exec(`
+    CREATE TRIGGER fail_recovery BEFORE UPDATE ON incidents
+    BEGIN SELECT RAISE(ABORT, 'resolution unavailable'); END;
+  `);
+  await runner.tick();
+  const retryAt = now + config.intervalSeconds * 1000;
+  assert.equal(calls, 1);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /resolution unavailable/);
+  assert.equal(runner.active.size, 0);
+  assert.deepEqual(store.get(monitor.id), { ...before, nextCheckAt: new Date(retryAt).toISOString() });
+  assert.deepEqual(store.checks(monitor.id, 100), checks);
+  assert.deepEqual(store.incidents(monitor.id, 100), incidents);
+  store.db.exec('DROP TRIGGER fail_recovery');
+
+  now = retryAt - 1;
+  await runner.tick();
+  assert.equal(calls, 1);
+  now = retryAt;
+  await runner.tick();
+  assert.equal(calls, 2);
+  assert.equal(errors.length, 1);
+  assert.equal(runner.active.size, 0);
+  const current = store.get(monitor.id);
+  assert.equal(current.status, 'up');
+  assert.equal(current.consecutiveFailures, 0);
+  assert.equal(current.lastCheckedAt, new Date(now).toISOString());
+  assert.equal(current.nextCheckAt, new Date(now + config.intervalSeconds * 1000).toISOString());
+  const [saved, ...previous] = store.checks(monitor.id, 100);
+  assert.equal(saved.ok, true);
+  assert.equal(saved.checkedAt, current.lastCheckedAt);
+  assert.deepEqual(previous, checks);
+  assert.deepEqual(store.incidents(monitor.id, 100), [{
+    ...incidents[0], resolvedAt: current.lastCheckedAt, resolution: 'recovered'
+  }]);
+});
