@@ -119,12 +119,16 @@ export class Store {
     this.db.prepare(`
       UPDATE monitors SET status = ?, failure_count = ?, last_checked_at = ?, next_check_at = ? WHERE id = ?
     `).run(status, failures, Date.parse(result.checkedAt), nextCheckAt, row.id);
+    this.#updateIncident(row.id, result, failures);
+  }
+
+  #updateIncident(id, result, failures) {
     if (result.ok) {
-      this.resolveIncident(row.id, result.checkedAt, 'recovered');
+      this.resolveIncident(id, result.checkedAt, 'recovered');
     } else if (failures >= 3) {
       this.db.prepare(`
         INSERT OR IGNORE INTO incidents (monitor_id, opened_at, failure_code, message) VALUES (?, ?, ?, ?)
-      `).run(row.id, result.checkedAt, result.failureCode, result.message);
+      `).run(id, result.checkedAt, result.failureCode, result.message);
     }
   }
 
